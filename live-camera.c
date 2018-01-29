@@ -24,6 +24,33 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <zmq.h>
+
+#define S_NOTIFY_MSG " "
+#define S_ERROR_MSG "Error while writing to self-pipe.\n"
+static int s_fd;
+static void s_signal_handler (int signal_value)
+{
+    int rc = write (s_fd, S_NOTIFY_MSG, sizeof(S_NOTIFY_MSG));
+    if (rc != sizeof(S_NOTIFY_MSG)) {
+        write (STDOUT_FILENO, S_ERROR_MSG, sizeof(S_ERROR_MSG)-1);
+        exit(1);
+    }
+}
+
+static void s_catch_signals (int fd)
+{
+    s_fd = fd;
+
+    struct sigaction action;
+    action.sa_handler = s_signal_handler;
+    //  Doesn't matter if SA_RESTART set because self-pipe will wake up zmq_poll
+    //  But setting to 0 will allow zmq_read to be interrupted.
+    action.sa_flags = 0;
+    sigemptyset (&action.sa_mask);
+    sigaction (SIGINT, &action, NULL);
+    sigaction (SIGTERM, &action, NULL);
+}
 // Function which execs "am broadcast ..".
 _Noreturn void exec_am_broadcast(int argc, char** argv, char* input_address_string, char* output_address_string)
 {
@@ -92,14 +119,59 @@ void* transmit_stdin_to_socket(void* arg) {
     return NULL;
 }
 
-// Main thread function which reads from input socket and writes to stdout.
-void transmit_socket_to_stdout(int input_socket_fd) {
+void my_free (void *data, void *hint)
+{
+ free (data);
+}
+
+// Main thread function which reads from input socket and publishes on zmq socket.
+void transmit_socket_to_stdout(int input_socket_fd, int pipe_read_fd) {
     ssize_t len;
-    char buffer[1024];
-    while ((len = read(input_socket_fd, &buffer, sizeof(buffer))) > 0) {
-        write(STDOUT_FILENO, buffer, len);
+    const ssize_t buffer_len = 320 * 240;
+    const ssize_t channel = 4;
+    ssize_t count = 0;
+    ssize_t curr = 0;
+    char *buffer = malloc(buffer_len);
+
+    void *context = zmq_ctx_new ();
+    void *publisher = zmq_socket (context, ZMQ_PUB);
+
+    int rc = zmq_bind (publisher, "tcp://*:5555");
+    if (rc == -1) {
+	perror("zmq_bind()");
+     }
+
+    while ((len = read(input_socket_fd, &buffer[count], buffer_len-curr)) > 0) {
+        curr += len;
+	if(curr == buffer_len){
+		count++;
+		zmq_msg_t msg;
+		if(zmq_msg_init_data(&msg, buffer, buffer_len, my_free, NULL) != 0){
+			perror("zmq_msq_init_data()");
+			exit(1);
+		}
+		zmq_msg_send(&msg, publisher, count%channel==0? ZMQ_SNDMORE:0);
+
+		buffer = malloc(buffer_len);
+		curr = 0;
+	}
+	char buffer [1];
+        rc = read (pipe_read_fd, buffer, 1);  // clear notifying byte
+	if(rc < 0){
+		if (errno == EAGAIN) { continue; }
+                if (errno == EINTR) { continue; }
+                perror("read()");
+                break;
+	}
+	else if(rc == 1)
+		break;
     }
     if (len < 0) perror("read()");
+
+    printf("Cleaning up ZMQ\n");
+    zmq_close(publisher);
+    zmq_ctx_destroy(context);
+
 }
 
 int main(int argc, char** argv) {
@@ -149,7 +221,29 @@ int main(int argc, char** argv) {
     pthread_t transmit_thread;
     pthread_create(&transmit_thread, NULL, transmit_stdin_to_socket, &output_server_socket);
 
-    transmit_socket_to_stdout(input_client_socket);
+    int pipefds[2];
+    int rc = pipe(pipefds);
+    if (rc != 0) {
+        perror("Creating self-pipe");
+        exit(1);
+    }
+
+    // Make pipe non-blocking
+    for (int i = 0; i < 2; i++) {
+        int flags = fcntl(pipefds[i], F_GETFL, 0);
+        if (flags < 0) {
+            perror ("fcntl(F_GETFL)");
+            exit(1);
+        }
+        rc = fcntl (pipefds[0], F_SETFL, flags | O_NONBLOCK);
+        if (rc != 0) {
+            perror ("fcntl(F_SETFL)");
+            exit(1);
+        }
+    }
+
+    s_catch_signals (pipefds[1]);
+    transmit_socket_to_stdout(input_client_socket, pipefds[0]);
 
     return 0;
 }

@@ -2,7 +2,7 @@ CFLAGS += -std=c11 -Wall -Wextra -pedantic -Werror
 PREFIX ?= /data/data/com.termux/files/usr
 
 live-camera: live-camera.c
-
+	$(CC) -o $@ live-camera.c -lzmq 
 install: live-camera
 	mkdir -p $(PREFIX)/bin/ $(PREFIX)/libexec/
 	install live-camera $(PREFIX)/libexec/
