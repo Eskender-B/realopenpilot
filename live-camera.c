@@ -135,6 +135,8 @@ void transmit_socket_to_stdout(int input_socket_fd, int pipe_read_fd) {
 
     void *context = zmq_ctx_new ();
     void *publisher = zmq_socket (context, ZMQ_PUB);
+    const int hwm = 50;
+    zmq_setsockopt(publisher, ZMQ_SNDHWM, &hwm, sizeof(hwm)); 
 
     int rc = zmq_bind (publisher, "tcp://*:5555");
     if (rc == -1) {
@@ -148,10 +150,12 @@ void transmit_socket_to_stdout(int input_socket_fd, int pipe_read_fd) {
 		zmq_msg_t msg;
 		if(zmq_msg_init_data(&msg, buffer, buffer_len, my_free, NULL) != 0){
 			perror("zmq_msq_init_data()");
-			exit(1);
+			break;	
 		}
-		zmq_msg_send(&msg, publisher, count%channel==0? ZMQ_SNDMORE:0);
-
+		if(zmq_msg_send(&msg, publisher, count%channel==0? ZMQ_SNDMORE:0) == -1){
+			if(errno == EAGAIN) printf("Message dropped\n");
+			else {perror("zmq_msg_send()"); break;}
+		}
 		buffer = malloc(buffer_len);
 		curr = 0;
 	}
@@ -235,7 +239,7 @@ int main(int argc, char** argv) {
             perror ("fcntl(F_GETFL)");
             exit(1);
         }
-        rc = fcntl (pipefds[0], F_SETFL, flags | O_NONBLOCK);
+        rc = fcntl (pipefds[i], F_SETFL, flags | O_NONBLOCK);
         if (rc != 0) {
             perror ("fcntl(F_SETFL)");
             exit(1);
