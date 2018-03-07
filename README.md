@@ -7,8 +7,7 @@ The code is written in c++ and python and will run on a linux environment undern
 ## Status
 It is at the very early stage. Current code only has the ff for now:
 * [live-camera.c](live-camera.c) for 
-	* Sending an Android intent to []() android app that accesses camera feed and streams it using 
-	  Anonymous Unix socket.
+	* Sending an Android intent to [termux-api](https://github.com/Eskender-B/termux-api) android app that accesses camera feed and streams it using Anonymous Unix socket.
 	* Receiving the incoming camera feed and publishing it on ZMQ socket.
 
 * [test-live-camera.py](test-live-camera.py)
