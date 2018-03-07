@@ -127,9 +127,7 @@ void my_free (void *data, void *hint)
 // Main thread function which reads from input socket and publishes on zmq socket.
 void transmit_socket_to_stdout(int input_socket_fd, int pipe_read_fd) {
     ssize_t len;
-    const ssize_t buffer_len = 320 * 240;
-    const ssize_t channel = 4;
-    ssize_t count = 0;
+    const ssize_t buffer_len = 320 * 240 * 4;
     ssize_t curr = 0;
     char *buffer = malloc(buffer_len);
 
@@ -138,29 +136,29 @@ void transmit_socket_to_stdout(int input_socket_fd, int pipe_read_fd) {
     const int hwm = 50;
     zmq_setsockopt(publisher, ZMQ_SNDHWM, &hwm, sizeof(hwm)); 
 
-    int rc = zmq_bind (publisher, "tcp://*:5555");
+    int rc = zmq_bind (publisher, "tcp://*:9999");
     if (rc == -1) {
 	perror("zmq_bind()");
      }
 
-    while ((len = read(input_socket_fd, &buffer[count], buffer_len-curr)) > 0) {
+    while ((len = read(input_socket_fd, &buffer[curr], buffer_len-curr)) > 0) {
         curr += len;
 	if(curr == buffer_len){
-		count++;
+		printf("Frame read!\n");
 		zmq_msg_t msg;
 		if(zmq_msg_init_data(&msg, buffer, buffer_len, my_free, NULL) != 0){
 			perror("zmq_msq_init_data()");
 			break;	
 		}
-		if(zmq_msg_send(&msg, publisher, count%channel==0? ZMQ_SNDMORE:0) == -1){
+		if(zmq_msg_send(&msg, publisher, 0) == -1){
 			if(errno == EAGAIN) printf("Message dropped\n");
 			else {perror("zmq_msg_send()"); break;}
 		}
 		buffer = malloc(buffer_len);
 		curr = 0;
 	}
-	char buffer [1];
-        rc = read (pipe_read_fd, buffer, 1);  // clear notifying byte
+	char buff [1];
+        rc = read (pipe_read_fd, buff, 1);  // clear notifying byte
 	if(rc < 0){
 		if (errno == EAGAIN) { continue; }
                 if (errno == EINTR) { continue; }
